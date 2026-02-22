@@ -1,0 +1,41 @@
+# IDE
+.idea/
+
+# CMake/CLion build trees
+cmake-build-*/
+
+# CMake generated files
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+CTestTestfile.cmake
+install_manifest.txt
+compile_commands.json
+
+# Object and dependency files
+*.o
+*.obj
+*.lo
+*.la
+*.d
+
+# Libraries and executables
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.lib
+*.exe
+*.out
+
+# Misc temporary files
+*.tmp
+*.log
+*~
+*.swp
+*.swo
+
+# Local test assets
+logo_bigtest.png
