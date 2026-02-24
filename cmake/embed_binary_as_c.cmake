@@ -17,6 +17,8 @@ if(NOT EXISTS "${INPUT}")
   message(FATAL_ERROR "Input file does not exist: ${INPUT}")
 endif()
 
+get_filename_component(_input_name "${INPUT}" NAME)
+
 file(READ "${INPUT}" _hex HEX)
 string(LENGTH "${_hex}" _hex_len)
 
@@ -45,4 +47,4 @@ else()
   string(APPEND _body "\n")
 endif()
 
-file(WRITE "${OUTPUT}" "/* Auto-generated from ${INPUT}. */\n#include <stddef.h>\n\nconst unsigned char ${SYMBOL}[] = {${_body}};\nconst size_t ${SYMBOL}_len = sizeof(${SYMBOL});\n")
+file(WRITE "${OUTPUT}" "/* Auto-generated from ${_input_name}. */\n#include <stddef.h>\n\nconst unsigned char ${SYMBOL}[] = {${_body}};\nconst size_t ${SYMBOL}_len = sizeof(${SYMBOL});\n")
