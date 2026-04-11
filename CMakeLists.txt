@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 cmake_minimum_required(VERSION 3.16)
-project(hex-splash VERSION 0.12 LANGUAGES C)
+project(hex-splash VERSION 0.13 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
