@@ -21,6 +21,7 @@
  */
 
 #include "ubootenv_logo_source.h"
+#include "splash_util.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -41,6 +42,7 @@
 #endif
 
 #define HEX_SPLASH_FW_ENV_CONFIG "/etc/fw_env.config"
+#define HEX_SPLASH_ENV_BROWSER "ttm.browser"
 #define HEX_SPLASH_ENV_LOGO_ENABLE "ttm.logo-custom"
 #define HEX_SPLASH_ENV_LOGO_PARTUUID "ttm.logo-partuuid"
 #define HEX_SPLASH_ENV_LOGO_PATH "ttm.logo-path"
@@ -89,6 +91,50 @@ static char *env_get_trim(struct uboot_ctx *ctx, const char *key)
 	if (v)
 		trim_ascii_whitespace_inplace(v);
 	return v;
+}
+
+static bool open_env_context(struct uboot_ctx **ctx_out, bool verbose)
+{
+	struct uboot_ctx *ctx = NULL;
+
+	if (!ctx_out)
+		return false;
+
+	*ctx_out = NULL;
+
+	if (libuboot_initialize(&ctx, NULL) != 0 || !ctx) {
+		if (verbose)
+			fprintf(stderr, "warning: libubootenv initialize failed; custom logo disabled\n");
+		if (ctx)
+			libuboot_exit(ctx);
+		return false;
+	}
+
+	if (libuboot_read_config(ctx, HEX_SPLASH_FW_ENV_CONFIG) != 0) {
+		if (verbose)
+			fprintf(stderr, "warning: cannot read %s; custom logo disabled\n", HEX_SPLASH_FW_ENV_CONFIG);
+		libuboot_exit(ctx);
+		return false;
+	}
+
+	if (libuboot_open(ctx) != 0) {
+		if (verbose)
+			fprintf(stderr, "warning: cannot open U-Boot environment; custom logo disabled\n");
+		libuboot_exit(ctx);
+		return false;
+	}
+
+	*ctx_out = ctx;
+	return true;
+}
+
+static void close_env_context(struct uboot_ctx *ctx)
+{
+	if (!ctx)
+		return;
+
+	libuboot_close(ctx);
+	libuboot_exit(ctx);
 }
 
 static const char *skip_partuuid_prefix(const char *s)
@@ -150,6 +196,63 @@ static bool is_logo_switch_disabled(const char *value)
 		return false;
 
 	return parsed == 0;
+}
+
+static unsigned normalize_screen_rotation(long value)
+{
+	switch (value) {
+	case 0:
+	case 90:
+	case 180:
+	case 270:
+		return (unsigned)value;
+	default:
+		return 0u;
+	}
+}
+
+static unsigned parse_screen_rotation_from_browser_json(const char *json)
+{
+	static const char needle[] = "\"ScreenRotation\"";
+	const char *pos = json;
+
+	if (!json)
+		return 0u;
+
+	while ((pos = strcasestr(pos, needle)) != NULL) {
+		char *endptr;
+		long value;
+		const char *cursor = pos + sizeof(needle) - 1u;
+
+		while (*cursor != '\0' && isspace((unsigned char)*cursor))
+			cursor++;
+		if (*cursor != ':') {
+			pos++;
+			continue;
+		}
+
+		cursor++;
+		while (*cursor != '\0' && isspace((unsigned char)*cursor))
+			cursor++;
+
+		errno = 0;
+		value = strtol(cursor, &endptr, 10);
+		if (cursor == endptr || errno != 0) {
+			pos++;
+			continue;
+		}
+
+		while (*endptr != '\0' && isspace((unsigned char)*endptr))
+			endptr++;
+		if (*endptr != '\0' && *endptr != ',' && *endptr != '}' && *endptr != ']') {
+			pos++;
+			continue;
+		}
+
+		return normalize_screen_rotation(value);
+	}
+
+	return 0u;
 }
 
 static bool get_block_device_rdev(const char *path, dev_t *out_rdev)
@@ -272,8 +375,6 @@ static void load_logo_env_values(char *partuuid, size_t partuuid_size,
 				 bool *enabled_out)
 {
 	struct uboot_ctx *ctx = NULL;
-	bool opened = false;
-
 	bool seen_enable = false;
 	bool seen_partuuid = false;
 	bool seen_path = false;
@@ -297,25 +398,8 @@ static void load_logo_env_values(char *partuuid, size_t partuuid_size,
 	}
 
 	/* If libubootenv isn't usable, disable custom logo and use built-in fallback. */
-	if (libuboot_initialize(&ctx, NULL) != 0 || !ctx) {
-		fprintf(stderr, "warning: libubootenv initialize failed; custom logo disabled\n");
-		if (ctx)
-			libuboot_exit(ctx);
+	if (!open_env_context(&ctx, true))
 		return;
-	}
-
-	if (libuboot_read_config(ctx, HEX_SPLASH_FW_ENV_CONFIG) != 0) {
-		fprintf(stderr, "warning: cannot read %s; custom logo disabled\n", HEX_SPLASH_FW_ENV_CONFIG);
-		libuboot_exit(ctx);
-		return;
-	}
-
-	if (libuboot_open(ctx) != 0) {
-		fprintf(stderr, "warning: cannot open U-Boot environment; custom logo disabled\n");
-		libuboot_exit(ctx);
-		return;
-	}
-	opened = true;
 
 	/* ttm.logo-custom */
 	{
@@ -376,9 +460,7 @@ static void load_logo_env_values(char *partuuid, size_t partuuid_size,
 	}
 
 out:
-	if (opened)
-		libuboot_close(ctx);
-	libuboot_exit(ctx);
+	close_env_context(ctx);
 }
 
 static bool mount_source_matches_partuuid(const char *source, const char *partuuid, dev_t resolved_rdev)
@@ -551,4 +633,30 @@ bool ubootenv_logo_source_resolve(struct ubootenv_logo_source *src, char *logo_p
 	}
 
 	return true;
+}
+
+unsigned ubootenv_logo_source_read_screen_rotation(void)
+{
+	struct uboot_ctx *ctx = NULL;
+	char *encoded = NULL;
+	char *decoded = NULL;
+	unsigned rotation = 0u;
+
+	if (!open_env_context(&ctx, false))
+		return 0u;
+
+	encoded = env_get_trim(ctx, HEX_SPLASH_ENV_BROWSER);
+	if (!encoded || encoded[0] == '\0')
+		goto out;
+
+	if (!splash_decode_base64_string(encoded, &decoded))
+		goto out;
+
+	rotation = parse_screen_rotation_from_browser_json(decoded);
+
+out:
+	free(decoded);
+	free(encoded);
+	close_env_context(ctx);
+	return rotation;
 }

@@ -418,6 +418,76 @@ void splash_composite_onto_black_inplace(struct splash_image *img)
 	}
 }
 
+struct splash_image splash_rotate_rgba(const struct splash_image *src, uint32_t rotation_degrees)
+{
+	struct splash_image dst = { 0 };
+	size_t pixels;
+	size_t size;
+
+	if (!src || !src->rgba || src->w == 0u || src->h == 0u)
+		splash_die_msg("rotate: invalid source image");
+
+	switch (rotation_degrees) {
+	case 0u:
+	case 180u:
+		dst.w = src->w;
+		dst.h = src->h;
+		break;
+	case 90u:
+	case 270u:
+		dst.w = src->h;
+		dst.h = src->w;
+		break;
+	default:
+		splash_die_msg("rotate: invalid rotation");
+	}
+
+	if (splash_mul_overflow_size_t((size_t)dst.w, (size_t)dst.h, &pixels) ||
+	    splash_mul_overflow_size_t(pixels, 4u, &size))
+		splash_die_msg("rotate: image too large");
+
+	dst.rgba = (uint8_t *)malloc(size);
+	if (!dst.rgba)
+		splash_die_msg("out of memory");
+
+	for (uint32_t y = 0; y < src->h; y++) {
+		for (uint32_t x = 0; x < src->w; x++) {
+			uint32_t dst_x;
+			uint32_t dst_y;
+			const uint8_t *src_px = src->rgba + (((size_t)y * (size_t)src->w + (size_t)x) * 4u);
+			uint8_t *dst_px;
+
+			switch (rotation_degrees) {
+			case 0u:
+				dst_x = x;
+				dst_y = y;
+				break;
+			case 90u:
+				dst_x = src->h - 1u - y;
+				dst_y = x;
+				break;
+			case 180u:
+				dst_x = src->w - 1u - x;
+				dst_y = src->h - 1u - y;
+				break;
+			case 270u:
+				dst_x = y;
+				dst_y = src->w - 1u - x;
+				break;
+			default:
+				dst_x = 0u;
+				dst_y = 0u;
+				break;
+			}
+
+			dst_px = dst.rgba + (((size_t)dst_y * (size_t)dst.w + (size_t)dst_x) * 4u);
+			memcpy(dst_px, src_px, 4u);
+		}
+	}
+
+	return dst;
+}
+
 struct bilinear_axis_map {
 	uint32_t i0;
 	uint32_t i1;

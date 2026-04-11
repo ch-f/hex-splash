@@ -2,6 +2,7 @@
 #ifndef SPLASH_UTIL_H
 #define SPLASH_UTIL_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -18,5 +19,8 @@ int splash_profile_enabled(void);
 
 /* Parse env var as u32 (base-10). Returns fallback on errors. */
 uint32_t splash_parse_env_u32(const char *name, uint32_t fallback);
+
+/* Decodes a base64 string into a newly allocated NUL-terminated buffer. */
+bool splash_decode_base64_string(const char *src, char **decoded_out);
 
 #endif

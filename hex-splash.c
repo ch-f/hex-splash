@@ -52,6 +52,7 @@ static void usage(FILE *out, const char *argv0)
 		"  - ttm.logo-partuuid\n"
 		"  - ttm.logo-path\n"
 		"and falls back to the built-in logo.\n"
+		"Custom logos also honor ttm.browser.ScreenRotation (0/90/180/270).\n"
 		"\n"
 		"Set ttm.logo-custom=0 to force built-in fallback.\n"
 		"\n"
@@ -102,12 +103,15 @@ static int parse_cli(int argc, char **argv, struct cli_options *opts, int *exit_
 	return 1;
 }
 
-static int try_load_fast_logo(const struct splash_framebuffer *fb, const char *png_path, struct splash_image *img)
+static int try_load_fast_logo(const struct splash_framebuffer *fb, const char *png_path,
+			      unsigned rotation_degrees, struct splash_image *img)
 {
 	uint32_t src_w = 0, src_h = 0;
 	uint32_t dst_w, dst_h;
 
 	if (!png_path)
+		return 0;
+	if (rotation_degrees != 0u)
 		return 0;
 	if (!splash_png_try_probe_dimensions_from_file(png_path, &src_w, &src_h))
 		return 0;
@@ -126,24 +130,26 @@ static int try_load_fast_logo(const struct splash_framebuffer *fb, const char *p
 	return splash_png_try_load_nearest_scaled_rgba8_from_file(png_path, dst_w, dst_h, img);
 }
 
-static void render_logo(struct splash_framebuffer *fb, const char *png_path)
+static void render_logo(struct splash_framebuffer *fb, const char *png_path, unsigned rotation_degrees)
 {
 	const int do_profile = splash_profile_enabled();
 
 	uint64_t t0 = 0, t_load = 0, t_scale = 0, t_blit = 0;
 	struct splash_image img = { 0 };
+	struct splash_image rotated = { 0 };
 	struct splash_image scaled = { 0 };
 	uint32_t src_w, src_h;
 	uint32_t dst_w, dst_h;
 	int fast_decode = 0;
 	int used_builtin = 0;
+	int rotated_alloc = 0;
 	int scaled_alloc = 0;
 
 	if (do_profile)
 		t0 = splash_monotonic_millis();
 
 	/* Try fast decode only when it will actually help. */
-	fast_decode = try_load_fast_logo(fb, png_path, &img);
+	fast_decode = try_load_fast_logo(fb, png_path, rotation_degrees, &img);
 
 	/* Normal path: load fully (file or built-in), and composite onto black. */
 	if (!img.rgba)
@@ -152,18 +158,25 @@ static void render_logo(struct splash_framebuffer *fb, const char *png_path)
 	if (do_profile)
 		t_load = splash_monotonic_millis();
 
-	src_w = img.w;
-	src_h = img.h;
+	if (!used_builtin && rotation_degrees != 0u) {
+		rotated = splash_rotate_rgba(&img, rotation_degrees);
+		rotated_alloc = 1;
+	} else {
+		rotated = img;
+	}
 
-	scaled = img;
-	dst_w = img.w;
-	dst_h = img.h;
+	src_w = rotated.w;
+	src_h = rotated.h;
+
+	scaled = rotated;
+	dst_w = rotated.w;
+	dst_h = rotated.h;
 
 	/* If fast decode succeeded, img is already scaled-to-fit. */
 	if (!fast_decode) {
-		splash_compute_fit_dimensions(img.w, img.h, fb->vinfo.xres, fb->vinfo.yres, &dst_w, &dst_h);
-		if (dst_w != img.w || dst_h != img.h) {
-			scaled = splash_scale_bilinear_rgba(&img, dst_w, dst_h);
+		splash_compute_fit_dimensions(rotated.w, rotated.h, fb->vinfo.xres, fb->vinfo.yres, &dst_w, &dst_h);
+		if (dst_w != rotated.w || dst_h != rotated.h) {
+			scaled = splash_scale_bilinear_rgba(&rotated, dst_w, dst_h);
 			scaled_alloc = 1;
 		}
 	}
@@ -179,6 +192,8 @@ static void render_logo(struct splash_framebuffer *fb, const char *png_path)
 
 	if (scaled_alloc)
 		splash_image_free(&scaled);
+	if (rotated_alloc)
+		splash_image_free(&rotated);
 	splash_image_free(&img);
 
 	if (do_profile) {
@@ -191,9 +206,9 @@ static void render_logo(struct splash_framebuffer *fb, const char *png_path)
 
 		fprintf(stderr,
 			"profile-render: load=%llums scale=%llums blit=%llums total=%llums "
-			"src=%ux%u dst=%ux%u fast=%d source=%s\n",
+			"src=%ux%u dst=%ux%u fast=%d source=%s rotation=%u\n",
 			load_ms, scale_ms, blit_ms, total_ms,
-			src_w, src_h, dst_w, dst_h, fast_decode, source);
+			src_w, src_h, dst_w, dst_h, fast_decode, source, used_builtin ? 0u : rotation_degrees);
 	}
 }
 
@@ -204,6 +219,7 @@ int main(int argc, char **argv)
 	struct splash_framebuffer fb = { .fd = -1 };
 	char resolved_logo_path[UBOOTENV_LOGO_SOURCE_PATH_MAX];
 	const char *selected_png_path = NULL;
+	unsigned rotation_degrees = 0u;
 	int exit_code = 0;
 
 	const int do_profile = splash_profile_enabled();
@@ -222,6 +238,9 @@ int main(int argc, char **argv)
 		selected_png_path = resolved_logo_path;
 	}
 
+	if (selected_png_path)
+		rotation_degrees = ubootenv_logo_source_read_screen_rotation();
+
 	if (do_profile)
 		t_resolve = splash_monotonic_millis();
 
@@ -237,7 +256,7 @@ int main(int argc, char **argv)
 	if (do_profile)
 		t_clear = splash_monotonic_millis();
 
-	render_logo(&fb, selected_png_path);
+	render_logo(&fb, selected_png_path, rotation_degrees);
 
 	if (do_profile) {
 		t_render = splash_monotonic_millis();

@@ -29,6 +29,7 @@ struct splash_image splash_png_load_rgba8_from_memory(const void *data, size_t s
 
 /* Image processing */
 void splash_composite_onto_black_inplace(struct splash_image *img);
+struct splash_image splash_rotate_rgba(const struct splash_image *src, uint32_t rotation_degrees);
 struct splash_image splash_scale_bilinear_rgba(const struct splash_image *src, uint32_t dst_w, uint32_t dst_h);
 
 /*
