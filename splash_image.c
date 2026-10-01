@@ -526,13 +526,13 @@ static struct bilinear_axis_map *build_bilinear_axis_map(uint32_t src_n, uint32_
 	}
 
 	for (uint32_t i = 0; i < dst_n; i++) {
-		uint32_t fp = (uint32_t)((uint64_t)i * (uint64_t)(src_n - 1u) * 65536ull / (uint64_t)(dst_n - 1u));
-		uint32_t i0 = fp >> 16;
+		uint64_t num = (uint64_t)i * (uint64_t)(src_n - 1u);
+		uint32_t i0 = (uint32_t)(num / (dst_n - 1u));
 		uint32_t i1 = (i0 + 1u < src_n) ? (i0 + 1u) : i0;
 
 		map[i].i0 = i0;
 		map[i].i1 = i1;
-		map[i].w = (uint16_t)(fp & 0xFFFFu);
+		map[i].w = (uint16_t)((num % (dst_n - 1u)) * 65536ull / (dst_n - 1u));
 	}
 
 	return map;
