@@ -242,12 +242,17 @@ static int decode_nearest_scaled_rgba8_from_stream(FILE *fp, uint32_t dst_w, uin
 {
 	png_structp png_ptr = NULL;
 	png_infop info_ptr = NULL;
-	struct fast_decode_buffers bufs = { 0 };
+	/* libpng can longjmp after allocations. Keep ownership off the stack:
+	 * automatic objects modified after setjmp would be indeterminate. */
+	struct fast_decode_buffers *bufs = calloc(1, sizeof(*bufs));
 
 	png_uint_32 src_w = 0, src_h = 0;
 	int bit_depth = 0, color_type = 0, interlace_type = 0, compression_type = 0, filter_method = 0;
 	size_t row_bytes;
 	uint32_t dst_y = 0;
+
+	if (!bufs)
+		return 0;
 
 	png_ptr = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
 	if (!png_ptr)
@@ -292,26 +297,28 @@ static int decode_nearest_scaled_rgba8_from_stream(FILE *fp, uint32_t dst_w, uin
 	if (row_bytes < (size_t)src_w * 4u)
 		goto fail;
 
-	if (!alloc_fast_decode_buffers(row_bytes, dst_w, dst_h, &bufs))
+	if (!alloc_fast_decode_buffers(row_bytes, dst_w, dst_h, bufs))
 		goto fail;
 
-	build_sampling_maps((uint32_t)src_w, (uint32_t)src_h, dst_w, dst_h, bufs.x_map, bufs.y_map);
+	build_sampling_maps((uint32_t)src_w, (uint32_t)src_h, dst_w, dst_h, bufs->x_map, bufs->y_map);
 
-	decode_sampled_rows(png_ptr, &bufs, (uint32_t)src_h, dst_w, dst_h, &dst_y);
-	fill_remaining_rows(bufs.dst_buf, dst_w, dst_h, dst_y);
+	decode_sampled_rows(png_ptr, bufs, (uint32_t)src_h, dst_w, dst_h, &dst_y);
+	fill_remaining_rows(bufs->dst_buf, dst_w, dst_h, dst_y);
 
 	png_read_end(png_ptr, NULL);
 
 	out->w = dst_w;
 	out->h = dst_h;
-	out->rgba = bufs.dst_buf;
-	bufs.dst_buf = NULL;
-	free_fast_decode_buffers(&bufs);
+	out->rgba = bufs->dst_buf;
+	bufs->dst_buf = NULL;
+	free_fast_decode_buffers(bufs);
+	free(bufs);
 	png_destroy_read_struct(&png_ptr, &info_ptr, NULL);
 	return 1;
 
 fail:
-	free_fast_decode_buffers(&bufs);
+	free_fast_decode_buffers(bufs);
+	free(bufs);
 	if (png_ptr || info_ptr)
 		png_destroy_read_struct(png_ptr ? &png_ptr : NULL, info_ptr ? &info_ptr : NULL, NULL);
 	return 0;
