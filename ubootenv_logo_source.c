@@ -566,19 +566,32 @@ static bool mount_partuuid_temporary(const char *resolved_device, char *mount_di
 	return false;
 }
 
-void ubootenv_logo_source_cleanup(struct ubootenv_logo_source *src)
+bool ubootenv_logo_source_cleanup(struct ubootenv_logo_source *src)
 {
 	if (!src)
-		return;
+		return true;
 
 	if (src->is_mounted_by_us && src->mount_dir[0] != '\0') {
-		if (umount(src->mount_dir) != 0)
+		if (umount(src->mount_dir) != 0) {
 			fprintf(stderr, "warning: umount(%s) failed: %s\n", src->mount_dir, strerror(errno));
-		if (rmdir(src->mount_dir) != 0)
+			/* Only our temporary mounts enter this path, and they are private.
+			 * Detach a busy mount rather than let it delay the next boot stage. */
+			if (umount2(src->mount_dir, MNT_DETACH) != 0) {
+				fprintf(stderr, "warning: detach(%s) failed: %s\n", src->mount_dir, strerror(errno));
+				return false;
+			}
+		}
+		src->is_mounted_by_us = false;
+	}
+	if (src->mount_dir[0] != '\0') {
+		if (rmdir(src->mount_dir) != 0 && errno != ENOENT) {
 			fprintf(stderr, "warning: rmdir(%s) failed: %s\n", src->mount_dir, strerror(errno));
+			return false;
+		}
 	}
 
 	memset(src, 0, sizeof(*src));
+	return true;
 }
 
 bool ubootenv_logo_source_resolve(struct ubootenv_logo_source *src, char *logo_path, size_t logo_path_size)
@@ -595,8 +608,9 @@ bool ubootenv_logo_source_resolve(struct ubootenv_logo_source *src, char *logo_p
 		return false;
 
 	/* Resolve is reuse-safe: clean up any previous temporary mount. */
-	ubootenv_logo_source_cleanup(src);
 	logo_path[0] = '\0';
+	if (!ubootenv_logo_source_cleanup(src))
+		return false;
 
 	load_logo_env_values(partuuid, sizeof(partuuid), env_logo_path, sizeof(env_logo_path), &enabled);
 	if (!enabled)

@@ -19,4 +19,5 @@ struct ubootenv_logo_source {
 
 bool ubootenv_logo_source_resolve(struct ubootenv_logo_source *src, char *logo_path, size_t logo_path_size);
 unsigned ubootenv_logo_source_read_screen_rotation(void);
-void ubootenv_logo_source_cleanup(struct ubootenv_logo_source *src);
+/* On failure, ownership is retained so cleanup can be retried. */
+bool ubootenv_logo_source_cleanup(struct ubootenv_logo_source *src);

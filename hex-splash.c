@@ -271,6 +271,7 @@ int main(int argc, char **argv)
 
 out:
 	splash_framebuffer_release(&fb);
-	ubootenv_logo_source_cleanup(&external_logo);
+	if (!ubootenv_logo_source_cleanup(&external_logo))
+		exit_code = 1;
 	return exit_code;
 }
