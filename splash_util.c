@@ -9,6 +9,16 @@
 #include <sys/time.h>
 #include <time.h>
 
+void splash_report_errno(const char *what)
+{
+	fprintf(stderr, "%s: %s\n", what, strerror(errno));
+}
+
+void splash_report_error(const char *what)
+{
+	fprintf(stderr, "%s\n", what);
+}
+
 void splash_die_errno(const char *what)
 {
 	fprintf(stderr, "%s: %s\n", what, strerror(errno));

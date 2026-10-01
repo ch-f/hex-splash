@@ -6,6 +6,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
+void splash_report_errno(const char *what);
+void splash_report_error(const char *what);
+
 void splash_die_errno(const char *what);
 void splash_die_msg(const char *what);
 

@@ -2,8 +2,8 @@
 // hex-splash.c
 // Main flow:
 // - parse CLI
-// - optionally resolve external logo via U-Boot env
 // - open framebuffer
+// - optionally resolve external logo via U-Boot env
 // - clear
 // - load image (fast-decode when useful), scale if needed, blit centered
 
@@ -231,6 +231,14 @@ int main(int argc, char **argv)
 	if (do_profile)
 		t0 = splash_monotonic_millis();
 
+	/* No framebuffer means there is no reason to access or mount a logo. */
+	exit_code = splash_framebuffer_open(&fb, opts.fb_path);
+	if (exit_code)
+		goto out;
+
+	if (do_profile)
+		t_fb = splash_monotonic_millis();
+
 	/* Select logo: CLI path wins, else try U-Boot env, else built-in (handled in loader). */
 	selected_png_path = opts.png_path;
 	if (!selected_png_path &&
@@ -244,13 +252,6 @@ int main(int argc, char **argv)
 	if (do_profile)
 		t_resolve = splash_monotonic_millis();
 
-	exit_code = splash_framebuffer_open(&fb, opts.fb_path);
-	if (exit_code)
-		goto out;
-
-	if (do_profile)
-		t_fb = splash_monotonic_millis();
-
 	splash_fb_clear_black(fb.base, fb.vinfo.xres, fb.vinfo.yres, fb.line_length, fb.bytes_per_pixel);
 
 	if (do_profile)
@@ -261,10 +262,10 @@ int main(int argc, char **argv)
 	if (do_profile) {
 		t_render = splash_monotonic_millis();
 		fprintf(stderr,
-			"profile-main: resolve=%llums fb_open=%llums clear=%llums render=%llums total=%llums\n",
-			(unsigned long long)(t_resolve - t0),
-			(unsigned long long)(t_fb - t_resolve),
-			(unsigned long long)(t_clear - t_fb),
+			"profile-main: fb_open=%llums resolve=%llums clear=%llums render=%llums total=%llums\n",
+			(unsigned long long)(t_fb - t0),
+			(unsigned long long)(t_resolve - t_fb),
+			(unsigned long long)(t_clear - t_resolve),
 			(unsigned long long)(t_render - t_clear),
 			(unsigned long long)(t_render - t0));
 	}

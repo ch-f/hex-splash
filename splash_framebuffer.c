@@ -52,7 +52,7 @@ static inline void write_pixel_bytes(uint8_t *dst, uint32_t pix, int bytes_per_p
 #endif
 }
 
-static void validate_framebuffer_geometry(const struct fb_fix_screeninfo *finfo,
+static const char *validate_framebuffer_geometry(const struct fb_fix_screeninfo *finfo,
 					  const struct fb_var_screeninfo *vinfo,
 					  int bytes_per_pixel)
 {
@@ -71,29 +71,30 @@ static void validate_framebuffer_geometry(const struct fb_fix_screeninfo *finfo,
 	size_t last_visible_row;
 
 	if (fb_size == 0u)
-		splash_die_msg("framebuffer memory size is zero");
+		return "framebuffer memory size is zero";
 	if (stride == 0u)
-		splash_die_msg("framebuffer reports line_length=0");
+		return "framebuffer reports line_length=0";
 
 	if (xres_virtual < xres || yres_virtual < yres)
-		splash_die_msg("framebuffer virtual resolution smaller than visible");
+		return "framebuffer virtual resolution smaller than visible";
 	if (xoffset > xres_virtual || xres > xres_virtual - xoffset)
-		splash_die_msg("framebuffer x offset out of range for virtual resolution");
+		return "framebuffer x offset out of range for virtual resolution";
 	if (yoffset > yres_virtual || yres > yres_virtual - yoffset)
-		splash_die_msg("framebuffer y offset out of range for virtual resolution");
+		return "framebuffer y offset out of range for virtual resolution";
 
 	if (splash_mul_overflow_size_t(xoffset + xres, bpp, &visible_row_bytes))
-		splash_die_msg("framebuffer geometry overflow");
+		return "framebuffer geometry overflow";
 	if (visible_row_bytes > stride)
-		splash_die_msg("visible row exceeds finfo.line_length (stride)");
+		return "visible row exceeds finfo.line_length (stride)";
 
 	last_visible_row = yoffset + yres - 1u;
 	if (splash_mul_overflow_size_t(last_visible_row, stride, &last_row_start))
-		splash_die_msg("framebuffer geometry overflow");
+		return "framebuffer geometry overflow";
 	if (last_row_start > SIZE_MAX - visible_row_bytes)
-		splash_die_msg("framebuffer geometry overflow");
+		return "framebuffer geometry overflow";
 	if (last_row_start + visible_row_bytes > fb_size)
-		splash_die_msg("framebuffer smem_len too small for reported geometry");
+		return "framebuffer smem_len too small for reported geometry";
+	return NULL;
 }
 
 int splash_framebuffer_open(struct splash_framebuffer *fb, const char *fb_path)
@@ -102,23 +103,32 @@ int splash_framebuffer_open(struct splash_framebuffer *fb, const char *fb_path)
 	size_t yoffset;
 	size_t stride;
 	size_t bpp;
+	const char *geometry_error;
 
 	memset(fb, 0, sizeof(*fb));
 	fb->fd = -1;
 
 	fb->fd = open(fb_path, O_RDWR);
-	if (fb->fd < 0)
-		splash_die_errno("open framebuffer");
+	if (fb->fd < 0) {
+		splash_report_errno("open framebuffer");
+		goto fail;
+	}
 
 	(void)ioctl(fb->fd, FBIOBLANK, FB_BLANK_UNBLANK);
 
-	if (ioctl(fb->fd, FBIOGET_FSCREENINFO, &fb->finfo) != 0)
-		splash_die_errno("FBIOGET_FSCREENINFO");
-	if (ioctl(fb->fd, FBIOGET_VSCREENINFO, &fb->vinfo) != 0)
-		splash_die_errno("FBIOGET_VSCREENINFO");
+	if (ioctl(fb->fd, FBIOGET_FSCREENINFO, &fb->finfo) != 0) {
+		splash_report_errno("FBIOGET_FSCREENINFO");
+		goto fail;
+	}
+	if (ioctl(fb->fd, FBIOGET_VSCREENINFO, &fb->vinfo) != 0) {
+		splash_report_errno("FBIOGET_VSCREENINFO");
+		goto fail;
+	}
 
-	if (fb->vinfo.xres == 0u || fb->vinfo.yres == 0u)
-		splash_die_msg("framebuffer reports zero resolution");
+	if (fb->vinfo.xres == 0u || fb->vinfo.yres == 0u) {
+		splash_report_error("framebuffer reports zero resolution");
+		goto fail;
+	}
 
 	fb->bytes_per_pixel = (int)((fb->vinfo.bits_per_pixel + 7) / 8);
 	if (!(fb->bytes_per_pixel == 2 || fb->bytes_per_pixel == 3 || fb->bytes_per_pixel == 4)) {
@@ -131,12 +141,19 @@ int splash_framebuffer_open(struct splash_framebuffer *fb, const char *fb_path)
 		goto fail;
 	}
 
-	validate_framebuffer_geometry(&fb->finfo, &fb->vinfo, fb->bytes_per_pixel);
+	geometry_error = validate_framebuffer_geometry(&fb->finfo, &fb->vinfo, fb->bytes_per_pixel);
+	if (geometry_error) {
+		splash_report_error(geometry_error);
+		goto fail;
+	}
 
 	fb->map_size = (size_t)fb->finfo.smem_len;
 	fb->map = (uint8_t *)mmap(NULL, fb->map_size, PROT_READ | PROT_WRITE, MAP_SHARED, fb->fd, 0);
-	if (fb->map == MAP_FAILED)
-		splash_die_errno("mmap framebuffer");
+	if (fb->map == MAP_FAILED) {
+		fb->map = NULL;
+		splash_report_errno("mmap framebuffer");
+		goto fail;
+	}
 
 	fb->line_length = fb->finfo.line_length;
 
