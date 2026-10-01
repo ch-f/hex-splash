@@ -19,18 +19,6 @@ void splash_report_error(const char *what)
 	fprintf(stderr, "%s\n", what);
 }
 
-void splash_die_errno(const char *what)
-{
-	fprintf(stderr, "%s: %s\n", what, strerror(errno));
-	exit(1);
-}
-
-void splash_die_msg(const char *what)
-{
-	fprintf(stderr, "%s\n", what);
-	exit(1);
-}
-
 int splash_mul_overflow_size_t(size_t a, size_t b, size_t *out)
 {
 #if defined(__has_builtin)

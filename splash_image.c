@@ -11,6 +11,12 @@
 extern const unsigned char hex_splash_default_logo_png[];
 extern const size_t hex_splash_default_logo_png_len;
 
+static struct splash_image image_error(const char *message)
+{
+	splash_report_error(message);
+	return (struct splash_image){ 0 };
+}
+
 /* Fast decode heuristics */
 static const uint64_t k_fast_decode_min_src_pixels = 2000000ull;
 static const uint64_t k_fast_decode_min_ratio = 4ull;
@@ -197,8 +203,9 @@ int splash_png_try_load_rgba8_from_file(const char *path, struct splash_image *o
 
 	buf = (uint8_t *)malloc(size);
 	if (!buf) {
+		fprintf(stderr, "warning: libpng (%s): out of memory; falling back to built-in logo\n", path);
 		png_image_free(&img);
-		splash_die_msg("out of memory");
+		return 0;
 	}
 
 	if (!png_image_finish_read(&img, NULL, buf, 0, NULL)) {
@@ -351,21 +358,19 @@ struct splash_image splash_png_load_rgba8_from_memory(const void *data, size_t s
 	png_image img;
 	size_t pixels;
 	size_t rgba_size;
-	uint8_t *buf;
+	uint8_t *buf = NULL;
 
 	memset(&img, 0, sizeof(img));
 	img.version = PNG_IMAGE_VERSION;
 
 	if (!png_image_begin_read_from_memory(&img, data, size)) {
 		fprintf(stderr, "libpng (%s): %s\n", label, img.message);
-		png_image_free(&img);
-		exit(1);
+		goto fail;
 	}
 
 	if (img.width == 0u || img.height == 0u) {
 		fprintf(stderr, "libpng (%s): zero-sized image\n", label);
-		png_image_free(&img);
-		exit(1);
+		goto fail;
 	}
 
 	img.format = PNG_FORMAT_RGBA;
@@ -374,21 +379,18 @@ struct splash_image splash_png_load_rgba8_from_memory(const void *data, size_t s
 	if (splash_mul_overflow_size_t((size_t)img.width, (size_t)img.height, &pixels) ||
 		splash_mul_overflow_size_t(pixels, 4u, &rgba_size)) {
 		fprintf(stderr, "libpng (%s): image too large\n", label);
-		png_image_free(&img);
-		exit(1);
+		goto fail;
 	}
 
 	buf = (uint8_t *)malloc(rgba_size);
 	if (!buf) {
-		png_image_free(&img);
-		splash_die_msg("out of memory");
+		splash_report_error("out of memory");
+		goto fail;
 	}
 
 	if (!png_image_finish_read(&img, NULL, buf, 0, NULL)) {
 		fprintf(stderr, "libpng (%s): %s\n", label, img.message);
-		free(buf);
-		png_image_free(&img);
-		exit(1);
+		goto fail;
 	}
 
 	out.w = img.width;
@@ -397,6 +399,11 @@ struct splash_image splash_png_load_rgba8_from_memory(const void *data, size_t s
 
 	png_image_free(&img);
 	return out;
+
+fail:
+	free(buf);
+	png_image_free(&img);
+	return (struct splash_image){ 0 };
 }
 
 void splash_image_free(struct splash_image *img)
@@ -409,20 +416,23 @@ void splash_image_free(struct splash_image *img)
 	img->h = 0;
 }
 
-void splash_composite_onto_black_inplace(struct splash_image *img)
+int splash_composite_onto_black_inplace(struct splash_image *img)
 {
 	size_t n;
 
 	if (!img || !img->rgba)
-		return;
+		return 0;
 
-	if (splash_mul_overflow_size_t((size_t)img->w, (size_t)img->h, &n))
-		splash_die_msg("image too large");
+	if (splash_mul_overflow_size_t((size_t)img->w, (size_t)img->h, &n)) {
+		splash_report_error("image too large");
+		return 0;
+	}
 
 	for (size_t i = 0; i < n; i++) {
 		uint8_t *p = img->rgba + i * 4u;
 		premultiply_over_black_to_opaque_rgb(p, p);
 	}
+	return 1;
 }
 
 struct splash_image splash_rotate_rgba(const struct splash_image *src, uint32_t rotation_degrees)
@@ -432,7 +442,7 @@ struct splash_image splash_rotate_rgba(const struct splash_image *src, uint32_t 
 	size_t size;
 
 	if (!src || !src->rgba || src->w == 0u || src->h == 0u)
-		splash_die_msg("rotate: invalid source image");
+		return image_error("rotate: invalid source image");
 
 	switch (rotation_degrees) {
 	case 0u:
@@ -446,16 +456,16 @@ struct splash_image splash_rotate_rgba(const struct splash_image *src, uint32_t 
 		dst.h = src->w;
 		break;
 	default:
-		splash_die_msg("rotate: invalid rotation");
+		return image_error("rotate: invalid rotation");
 	}
 
 	if (splash_mul_overflow_size_t((size_t)dst.w, (size_t)dst.h, &pixels) ||
 	    splash_mul_overflow_size_t(pixels, 4u, &size))
-		splash_die_msg("rotate: image too large");
+		return image_error("rotate: image too large");
 
 	dst.rgba = (uint8_t *)malloc(size);
 	if (!dst.rgba)
-		splash_die_msg("out of memory");
+		return image_error("out of memory");
 
 	for (uint32_t y = 0; y < src->h; y++) {
 		for (uint32_t x = 0; x < src->w; x++) {
@@ -506,15 +516,21 @@ static struct bilinear_axis_map *build_bilinear_axis_map(uint32_t src_n, uint32_
 	size_t bytes;
 	struct bilinear_axis_map *map;
 
-	if (dst_n == 0u)
-		splash_die_msg("scale: invalid destination size");
+	if (dst_n == 0u) {
+		splash_report_error("scale: invalid destination size");
+		return NULL;
+	}
 
-	if (splash_mul_overflow_size_t((size_t)dst_n, sizeof(*map), &bytes))
-		splash_die_msg("scale: mapping too large");
+	if (splash_mul_overflow_size_t((size_t)dst_n, sizeof(*map), &bytes)) {
+		splash_report_error("scale: mapping too large");
+		return NULL;
+	}
 
 	map = (struct bilinear_axis_map *)malloc(bytes);
-	if (!map)
-		splash_die_msg("out of memory");
+	if (!map) {
+		splash_report_error("out of memory");
+		return NULL;
+	}
 
 	if (dst_n <= 1u || src_n <= 1u) {
 		for (uint32_t i = 0; i < dst_n; i++) {
@@ -582,35 +598,45 @@ struct splash_image splash_scale_bilinear_rgba(const struct splash_image *src, u
 	size_t size;
 	size_t src_stride;
 	size_t dst_stride;
-	struct bilinear_axis_map *x_map;
-	struct bilinear_axis_map *y_map;
+	struct bilinear_axis_map *x_map = NULL;
+	struct bilinear_axis_map *y_map = NULL;
 
 	if (!src || !src->rgba || src->w == 0u || src->h == 0u)
-		splash_die_msg("scale: invalid source image");
+		return image_error("scale: invalid source image");
 	if (dst_w == 0u || dst_h == 0u)
-		splash_die_msg("scale: invalid destination size");
+		return image_error("scale: invalid destination size");
 
 	if (splash_mul_overflow_size_t((size_t)dst_w, (size_t)dst_h, &pixels) ||
 	    splash_mul_overflow_size_t(pixels, 4u, &size))
-		splash_die_msg("scale: image too large");
+		return image_error("scale: image too large");
 
 	dst.w = dst_w;
 	dst.h = dst_h;
 	dst.rgba = (uint8_t *)malloc(size);
 	if (!dst.rgba)
-		splash_die_msg("out of memory");
+		return image_error("out of memory");
 
 	src_stride = (size_t)src->w * 4u;
 	dst_stride = (size_t)dst_w * 4u;
 
 	x_map = build_bilinear_axis_map(src->w, dst_w);
+	if (!x_map)
+		goto fail;
 	y_map = build_bilinear_axis_map(src->h, dst_h);
+	if (!y_map)
+		goto fail;
 
 	scale_bilinear_all_rows(src->rgba, dst.rgba, x_map, y_map, src_stride, dst_stride, dst_w, dst_h);
 
 	free(y_map);
 	free(x_map);
 	return dst;
+
+fail:
+	free(y_map);
+	free(x_map);
+	splash_image_free(&dst);
+	return (struct splash_image){ 0 };
 }
 
 struct splash_image splash_load_logo_image(const char *png_path, int *used_builtin)
@@ -632,11 +658,14 @@ struct splash_image splash_load_logo_image(const char *png_path, int *used_built
 
 	if (!img.rgba || img.w == 0u || img.h == 0u) {
 		splash_image_free(&img);
-		splash_die_msg("PNG has zero size");
+		return image_error("could not load logo image");
 	}
 
 	/* Important: do this before scaling to avoid edge halos on transparent PNGs. */
-	splash_composite_onto_black_inplace(&img);
+	if (!splash_composite_onto_black_inplace(&img)) {
+		splash_image_free(&img);
+		return (struct splash_image){ 0 };
+	}
 	return img;
 }
 

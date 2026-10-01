@@ -9,9 +9,6 @@
 void splash_report_errno(const char *what);
 void splash_report_error(const char *what);
 
-void splash_die_errno(const char *what);
-void splash_die_msg(const char *what);
-
 int splash_mul_overflow_size_t(size_t a, size_t b, size_t *out);
 
 /* Monotonic milliseconds (for profiling). */

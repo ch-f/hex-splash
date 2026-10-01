@@ -24,3 +24,11 @@ cmake --build build -j
 ```bash
 cmake --install build
 ```
+
+## Initramfs mount lifetime
+
+The framebuffer is opened before looking up an external logo. Temporary logo
+mounts live in a private mount namespace, so a signal or OOM kill cannot leave
+them mounted in the parent initramfs. If namespace isolation is unavailable,
+the built-in logo is used. An existing mount is borrowed and never unmounted.
+Ordinary rendering errors release resources and return a nonzero exit status.

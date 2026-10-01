@@ -130,7 +130,7 @@ static int try_load_fast_logo(const struct splash_framebuffer *fb, const char *p
 	return splash_png_try_load_nearest_scaled_rgba8_from_file(png_path, dst_w, dst_h, img);
 }
 
-static void render_logo(struct splash_framebuffer *fb, const char *png_path, unsigned rotation_degrees)
+static int render_logo(struct splash_framebuffer *fb, const char *png_path, unsigned rotation_degrees)
 {
 	const int do_profile = splash_profile_enabled();
 
@@ -138,12 +138,13 @@ static void render_logo(struct splash_framebuffer *fb, const char *png_path, uns
 	struct splash_image img = { 0 };
 	struct splash_image rotated = { 0 };
 	struct splash_image scaled = { 0 };
-	uint32_t src_w, src_h;
-	uint32_t dst_w, dst_h;
+	uint32_t src_w = 0, src_h = 0;
+	uint32_t dst_w = 0, dst_h = 0;
 	int fast_decode = 0;
 	int used_builtin = 0;
 	int rotated_alloc = 0;
 	int scaled_alloc = 0;
+	int exit_code = 1;
 
 	if (do_profile)
 		t0 = splash_monotonic_millis();
@@ -154,6 +155,8 @@ static void render_logo(struct splash_framebuffer *fb, const char *png_path, uns
 	/* Normal path: load fully (file or built-in), and composite onto black. */
 	if (!img.rgba)
 		img = splash_load_logo_image(png_path, &used_builtin);
+	if (!img.rgba)
+		goto out;
 
 	if (do_profile)
 		t_load = splash_monotonic_millis();
@@ -161,6 +164,8 @@ static void render_logo(struct splash_framebuffer *fb, const char *png_path, uns
 	if (!used_builtin && rotation_degrees != 0u) {
 		rotated = splash_rotate_rgba(&img, rotation_degrees);
 		rotated_alloc = 1;
+		if (!rotated.rgba)
+			goto out;
 	} else {
 		rotated = img;
 	}
@@ -178,6 +183,8 @@ static void render_logo(struct splash_framebuffer *fb, const char *png_path, uns
 		if (dst_w != rotated.w || dst_h != rotated.h) {
 			scaled = splash_scale_bilinear_rgba(&rotated, dst_w, dst_h);
 			scaled_alloc = 1;
+			if (!scaled.rgba)
+				goto out;
 		}
 	}
 
@@ -190,13 +197,15 @@ static void render_logo(struct splash_framebuffer *fb, const char *png_path, uns
 	if (do_profile)
 		t_blit = splash_monotonic_millis();
 
+	exit_code = 0;
+out:
 	if (scaled_alloc)
 		splash_image_free(&scaled);
 	if (rotated_alloc)
 		splash_image_free(&rotated);
 	splash_image_free(&img);
 
-	if (do_profile) {
+	if (do_profile && exit_code == 0) {
 		const unsigned long long load_ms = (unsigned long long)(t_load - t0);
 		const unsigned long long scale_ms = (unsigned long long)(t_scale - t_load);
 		const unsigned long long blit_ms = (unsigned long long)(t_blit - t_scale);
@@ -210,6 +219,7 @@ static void render_logo(struct splash_framebuffer *fb, const char *png_path, uns
 			load_ms, scale_ms, blit_ms, total_ms,
 			src_w, src_h, dst_w, dst_h, fast_decode, source, used_builtin ? 0u : rotation_degrees);
 	}
+	return exit_code;
 }
 
 int main(int argc, char **argv)
@@ -257,7 +267,9 @@ int main(int argc, char **argv)
 	if (do_profile)
 		t_clear = splash_monotonic_millis();
 
-	render_logo(&fb, selected_png_path, rotation_degrees);
+	exit_code = render_logo(&fb, selected_png_path, rotation_degrees);
+	if (exit_code)
+		goto out;
 
 	if (do_profile) {
 		t_render = splash_monotonic_millis();
