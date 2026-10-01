@@ -28,6 +28,7 @@
 #include <libuboot.h>
 #include <limits.h>
 #include <mntent.h>
+#include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -527,6 +528,17 @@ static bool mount_partuuid_temporary(const char *resolved_device, char *mount_di
 
 	if (!resolved_device || !mount_dir || mount_dir_size == 0)
 		return false;
+
+	/* Never let a splash failure leave a mount in the parent initramfs.
+	 * Making the copied mount tree private also prevents propagation back
+	 * to the parent's namespace. Process exit tears down this namespace,
+	 * including on fatal signals or an OOM kill. */
+	if (unshare(CLONE_NEWNS) != 0 ||
+	    mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) != 0) {
+		fprintf(stderr, "warning: cannot isolate logo mounts: %s; falling back to built-in logo\n",
+			strerror(errno));
+		return false;
+	}
 
 	created_dir = mkdtemp(mount_template);
 	if (!created_dir) {
